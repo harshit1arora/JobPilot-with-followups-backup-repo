@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { cosineSim, scoreFromSimilarity } from "./ai";
-import { validateDemoJob, VALIDATED_DEMO_JOBS } from "./jobs-catalog";
+import { CURATED_JOBS_CATALOG, validateDemoJob, VALIDATED_DEMO_JOBS } from "./jobs-catalog";
 
 describe("cosineSim", () => {
   it("is 1 for identical vectors", () => {
@@ -46,14 +46,32 @@ describe("Tailored Cover Letter Generator", () => {
 });
 
 describe("demo job catalog", () => {
-  it("includes multiple official jobs beyond Airbnb and keeps them valid", () => {
+  it("includes only official jobs with HTTPS career and apply links", () => {
     expect(VALIDATED_DEMO_JOBS.length).toBeGreaterThan(1);
     expect(VALIDATED_DEMO_JOBS.some((job) => job.company === "Airbnb")).toBe(true);
     expect(VALIDATED_DEMO_JOBS.some((job) => job.company === "Stripe")).toBe(true);
+
+    for (const job of VALIDATED_DEMO_JOBS) {
+      expect(job.sourceType).toBe("official");
+      expect(job.isActive).toBe(true);
+      expect(job.jobUrl).toMatch(/^https:\/\//);
+      expect(job.externalApplyUrl).toMatch(/^https:\/\//);
+    }
+
     const sources = new Set(VALIDATED_DEMO_JOBS.map((job) => job.source));
-    for (const source of ["Greenhouse", "Lever", "Ashby", "Workday", "LinkedIn"]) {
+    for (const source of ["Greenhouse", "Ashby", "Workday", "Other"]) {
       expect(sources.has(source as (typeof VALIDATED_DEMO_JOBS)[number]["source"])).toBe(true);
     }
+
+    expect(
+      validateDemoJob({
+        id: "sample-role",
+        company: "Example",
+        role: "Sample Role",
+        sourceType: "unverified",
+        isActive: true,
+      }),
+    ).toBe(false);
 
     const result = validateDemoJob({
       id: "google-swe",
@@ -67,5 +85,37 @@ describe("demo job catalog", () => {
     });
 
     expect(result).toBe(true);
+  });
+
+  it("uses the requested official role titles and job links", () => {
+    const requestedRoles = [
+      {
+        company: "Coinbase",
+        role: "Senior Software Engineer - Frontend - Coinbase Card team",
+        url: "https://www.coinbase.com/en-in/careers/positions/8088201",
+      },
+      {
+        company: "Airbnb",
+        role: "Senior Analyst, Advanced Analytics",
+        url: "https://careers.airbnb.com/positions/8225785/",
+      },
+      {
+        company: "Google",
+        role: "Technical Program Manager I, Infrastructure, Google Cloud",
+        url: "https://www.google.com/about/careers/applications/jobs/results/98673233158382278-technical-program-manager-i-infrastructure-google-cloud?_escaped_fragment_=t%3Djo%26jid%3D127025001%26&location=Addison%2C%20TX%2C%20USA",
+      },
+      {
+        company: "Meta",
+        role: "Production Engineer",
+        url: "https://www.metacareers.com/profile/job_details/1512065736047495/",
+      },
+    ];
+
+    for (const requested of requestedRoles) {
+      const job = CURATED_JOBS_CATALOG.find((item) => item.company === requested.company);
+      expect(job?.role).toBe(requested.role);
+      expect(job?.jobUrl).toBe(requested.url);
+      expect(job?.externalApplyUrl).toBe(requested.url);
+    }
   });
 });
