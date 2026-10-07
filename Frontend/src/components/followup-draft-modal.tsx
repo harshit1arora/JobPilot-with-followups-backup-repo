@@ -46,9 +46,6 @@ export function FollowUpDraftModal({
       setSubject(draft.subject);
       setBody(draft.body);
       setSource(draft.source);
-      if (draft.source === "template") {
-        toast.message("AI is unavailable right now — used the built-in template.");
-      }
     } finally {
       setIsGenerating(false);
     }
