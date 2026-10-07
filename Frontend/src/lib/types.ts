@@ -1,0 +1,425 @@
+/**
+ * types.ts — Core data contracts for the AI Job Application Tracker backend.
+ *
+ * For viva:
+ * These TypeScript interfaces define the shape of every piece of data that moves
+ * between the frontend UI, Firestore service functions, and future integrations
+ * (.NET API, AI module). TypeScript types are compile-time only — they are erased
+ * at runtime. Zod schemas in validation.ts enforce the same rules at runtime.
+ *
+ * Ownership model:
+ * Every entity has a `userId` field that contains the Firebase UID of the owner.
+ * Service functions always query with WHERE userId == authenticatedUserId.
+ */
+
+// ---------------------------------------------------------------------------
+// Status & Source Value Sets
+// ---------------------------------------------------------------------------
+
+/**
+ * "as const" turns the array into a readonly tuple.
+ * This lets us use the values both as:
+ * - A TypeScript union type (APPLICATION_STATUSES[number])
+ * - A runtime value list passed to Zod's z.enum() for validation
+ */
+export const APPLICATION_STATUSES = [
+  "Saved", // Bookmarked job — not yet applied (requirement-specified initial choice)
+  "Applied", // Application submitted
+  "Under Review", // Employer is reviewing the application
+  "Interview", // Interview scheduled or in progress
+  "Offer", // Offer received
+  "Rejected", // Application rejected
+] as const;
+
+export type ApplicationStatus = (typeof APPLICATION_STATUSES)[number];
+
+export const APPLICATION_SOURCES = [
+  "Greenhouse",
+  "Lever",
+  "Ashby",
+  "Workday",
+  "LinkedIn",
+  "Other",
+] as const;
+
+export type ApplicationSource = (typeof APPLICATION_SOURCES)[number];
+
+export const REMINDER_TYPES = ["follow-up", "interview", "deadline", "application-update"] as const;
+
+export type ReminderType = (typeof REMINDER_TYPES)[number];
+
+// ---------------------------------------------------------------------------
+// Application
+// ---------------------------------------------------------------------------
+
+/**
+ * A job application as returned by the service layer.
+ *
+ * Important fields:
+ * - id: Firestore auto-generated document ID
+ * - userId: Firebase UID of the owner — set by the service, never by the client
+ * - matchScore: Reserved for the AI teammate — undefined until AI assigns it
+ * - createdAt / updatedAt: ISO 8601 strings (easier for JSON serialization than Timestamps)
+ */
+export interface ApplicationDocument {
+  id: string;
+  userId: string;
+  company: string;
+  jobTitle: string;
+  applicationSource: ApplicationSource;
+  status: ApplicationStatus;
+  applicationUrl?: string | undefined; // Direct external career portal URL
+  jobDescription?: string | undefined;
+  salaryRange?: string | undefined;
+  location?: string | undefined;
+  notes?: string | undefined;
+  followUpDate?: string | undefined; // YYYY-MM-DD format
+  matchScore?: number | undefined; // AI-assigned — not written by our services
+  createdAt: string; // ISO 8601
+  updatedAt: string; // ISO 8601
+}
+
+/**
+ * Input required to create a new application.
+ * Notice: userId is NOT here — the service derives it from the authenticated session.
+ */
+export interface CreateApplicationInput {
+  company: string;
+  jobTitle: string;
+  applicationSource: ApplicationSource;
+  status: ApplicationStatus;
+  applicationUrl?: string | undefined;
+  jobDescription?: string | undefined;
+  salaryRange?: string | undefined;
+  location?: string | undefined;
+  notes?: string | undefined;
+  followUpDate?: string | undefined;
+  matchScore?: number | undefined;
+}
+
+/** Partial update — only the provided fields are changed in Firestore. */
+export type UpdateApplicationInput = Partial<CreateApplicationInput>;
+
+/**
+ * Parsed candidate profile extracted from Resume by AI
+ */
+export interface ParsedResumeProfile {
+  fullName: string;
+  email: string;
+  phone: string;
+  city: string;
+  country?: string | undefined;
+  ageOrExperience: string; // e.g. "24 years old / 3+ YOE" or "4 years experience"
+  targetRole: string;
+  skills: string[];
+  education: string;
+  linkedin?: string | undefined;
+  portfolio?: string | undefined;
+  github?: string | undefined;
+  projects?: Array<{ id?: string; name: string; description: string; technologies: string[]; link?: string }> | undefined;
+  summary?: string | undefined;
+  rawResumeText?: string | undefined;
+}
+
+/**
+ * AI-matched job recommendation item
+ */
+export interface SuggestedJob {
+  id: string;
+  company: string;
+  role: string;
+  location: string;
+  salaryRange: string;
+  source: ApplicationSource | "official";
+  applicationSource?: ApplicationSource | undefined;
+  sourceLabel?: string | undefined;
+  sourceType?: "official" | "curated" | "unverified" | undefined;
+  jobUrl?: string | undefined;
+  externalApplyUrl?: string | undefined;
+  isActive?: boolean | undefined;
+  isVerified?: boolean | undefined;
+  verifiedAt?: string | undefined;
+  employmentType?: string | undefined;
+  description: string;
+  requiredSkills: string[];
+  matchScore?: number | undefined;
+  matchReasons?: string[] | undefined;
+  experienceLevel?: string | undefined;
+  postedDate?: string | undefined;
+}
+
+/**
+ * Filters for querying applications.
+ * status → applied in Firestore query (uses composite index)
+ * applicationSource + search → applied in memory after fetch
+ */
+export interface ApplicationFilters {
+  status?: ApplicationStatus | "All" | undefined;
+  applicationSource?: ApplicationSource | "All" | undefined;
+  search?: string | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard
+// ---------------------------------------------------------------------------
+
+/**
+ * Aggregated statistics for the dashboard page.
+ * Replaces the hardcoded fake numbers currently in dashboard.tsx.
+ */
+export interface DashboardStats {
+  totalApplications: number;
+  byStatus: {
+    saved: number;
+    applied: number;
+    underReview: number;
+    interview: number;
+    offer: number;
+    rejected: number;
+  };
+  recentApplications: ApplicationDocument[]; // Up to 5, most recent first
+  upcomingFollowUps: ApplicationDocument[]; // followUpDate >= today, soonest first
+}
+
+// ---------------------------------------------------------------------------
+// Document / Resume
+// ---------------------------------------------------------------------------
+
+/**
+ * Metadata for a user-uploaded document (resume, cover letter, etc.).
+ *
+ * The actual binary file lives in Firebase Storage.
+ * This Firestore record holds the metadata only.
+ * storageRef is the Firebase Storage path — it is never returned directly
+ * to the UI; instead, we generate a signed URL via getDocumentDownloadUrl().
+ */
+export interface DocumentMetadata {
+  id: string;
+  userId: string;
+  applicationId?: string | undefined; // Optional link to a specific application
+  fileName: string;
+  fileType: string; // MIME type, e.g. "application/pdf"
+  fileSize: number; // bytes
+  storageRef: string; // Firebase Storage path (internal — not exposed to UI)
+  displayName?: string | undefined; // Optional friendly label, e.g. "Resume v2"
+  createdAt: string; // ISO 8601
+}
+
+/** Input when registering document metadata after a successful Storage upload. */
+export interface CreateDocumentInput {
+  applicationId?: string | undefined;
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+  storageRef: string;
+  displayName?: string | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Reminder
+// ---------------------------------------------------------------------------
+
+export interface ReminderDocument {
+  id: string;
+  userId: string;
+  applicationId: string; // Required — every reminder belongs to an application
+  reminderDate: string; // ISO 8601 datetime string
+  type: ReminderType;
+  message?: string | undefined;
+  isCompleted: boolean;
+  createdAt: string; // ISO 8601
+}
+
+export interface CreateReminderInput {
+  applicationId: string;
+  reminderDate: string; // ISO 8601 — e.g. "2026-09-01T09:00"
+  type: ReminderType;
+  message?: string | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Offers & Negotiation
+// ---------------------------------------------------------------------------
+
+export const OFFER_STATUSES = ["Pending", "Negotiating", "Accepted", "Declined"] as const;
+export type OfferStatus = (typeof OFFER_STATUSES)[number];
+
+export const WORK_MODES = ["Remote", "Hybrid", "On-site"] as const;
+export type WorkMode = (typeof WORK_MODES)[number];
+
+export const CURRENCIES = ["USD", "INR", "EUR", "GBP", "CAD", "AUD", "SGD", "AED"] as const;
+export type CurrencyCode = (typeof CURRENCIES)[number];
+
+export const NEGOTIATION_TONES = ["collaborative", "firm", "enthusiastic"] as const;
+export type NegotiationTone = (typeof NEGOTIATION_TONES)[number];
+
+/** A job offer. Money fields are yearly amounts in `currency` (equityValue is the total grant). */
+export interface OfferDocument {
+  id: string;
+  userId: string;
+  applicationId?: string | undefined;
+  company: string;
+  jobTitle: string;
+  location?: string | undefined;
+  workMode: WorkMode;
+  currency: string;
+  baseSalary: number;
+  annualBonus: number;
+  signingBonus: number;
+  equityValue: number;
+  equityVestYears: number;
+  retirementMatchPct: number;
+  otherBenefitsValue: number;
+  ptoDays?: number | undefined;
+  growthRating: number; // 1-5
+  workLifeRating: number; // 1-5
+  cultureRating: number; // 1-5
+  deadline?: string | undefined; // YYYY-MM-DD
+  status: OfferStatus;
+  notes?: string | undefined;
+  negotiationPlan?: string | undefined; // JSON string of the last NegotiationPlan
+  annualTotalComp?: number | undefined; // computed by the API; the UI recomputes locally
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateOfferInput {
+  applicationId?: string | undefined;
+  company: string;
+  jobTitle: string;
+  location?: string | undefined;
+  workMode: WorkMode;
+  currency: string;
+  baseSalary: number;
+  annualBonus: number;
+  signingBonus: number;
+  equityValue: number;
+  equityVestYears: number;
+  retirementMatchPct: number;
+  otherBenefitsValue: number;
+  ptoDays?: number | undefined;
+  growthRating: number;
+  workLifeRating: number;
+  cultureRating: number;
+  deadline?: string | undefined;
+  status: OfferStatus;
+  notes?: string | undefined;
+}
+
+export type UpdateOfferInput = Partial<CreateOfferInput> & {
+  negotiationPlan?: string | undefined;
+};
+
+export interface NegotiationCounter {
+  floor: number;
+  target: number;
+  opening: number;
+  raisePct: number;
+  aggressive: boolean;
+  rationale: string;
+}
+
+export interface NegotiationPlan {
+  strategy: string;
+  counter: NegotiationCounter;
+  talkingPoints: string[];
+  email: { subject: string; body: string };
+  phoneScript: string;
+  pushbackResponses: Array<{ objection: string; response: string }>;
+  risks: string[];
+  /** "ai" = Gemini wrote the prose, "template" = offline fallback was used. */
+  source: "ai" | "template";
+  generatedAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// Smart Follow-ups
+// ---------------------------------------------------------------------------
+
+export const FOLLOWUP_TONES = ["polite", "friendly", "direct"] as const;
+export type FollowUpTone = (typeof FOLLOWUP_TONES)[number];
+
+export const FOLLOWUP_CHANNELS = ["email", "linkedin", "call", "other"] as const;
+export type FollowUpChannel = (typeof FOLLOWUP_CHANNELS)[number];
+
+export interface FollowUpSettings {
+  enabled: boolean;
+  appliedDays: number;
+  underReviewDays: number;
+  interviewDays: number;
+  maxFollowUps: number;
+  autoCreateReminders: boolean;
+  defaultTone: FollowUpTone;
+}
+
+export interface FollowUpLog {
+  id: string;
+  userId: string;
+  applicationId: string;
+  channel: FollowUpChannel;
+  tone?: string | undefined;
+  subject?: string | undefined;
+  body?: string | undefined;
+  note?: string | undefined;
+  createdAt: string;
+}
+
+export interface CreateFollowUpLogInput {
+  applicationId: string;
+  channel: FollowUpChannel;
+  tone?: string | undefined;
+  subject?: string | undefined;
+  body?: string | undefined;
+  note?: string | undefined;
+}
+
+export interface FollowUpItem {
+  application: ApplicationDocument;
+  /** Whole days since the last activity on the application. */
+  daysQuiet: number;
+  thresholdDays: number;
+  /** 1 for the first follow-up, 2 for the second, ... */
+  followUpNumber: number;
+  sentCount: number;
+  lastActivityAt: number; // epoch ms
+  /** Days until the application becomes "quiet" (0 when already due). */
+  daysUntilDue: number;
+  /** When an open follow-up reminder is scheduled in the future (a snooze). */
+  snoozedUntil?: string | undefined;
+}
+
+export interface FollowUpEvaluation {
+  due: FollowUpItem[];
+  exhausted: FollowUpItem[];
+  snoozed: FollowUpItem[];
+  upcoming: FollowUpItem[];
+}
+
+// ---------------------------------------------------------------------------
+// Error Handling
+// ---------------------------------------------------------------------------
+
+/**
+ * Typed error class for all backend service errors.
+ *
+ * For viva:
+ * Instead of throwing plain JavaScript Errors, we use this typed class so
+ * the frontend can react differently to each situation — analogous to HTTP
+ * status codes but used within our service layer:
+ *
+ * VALIDATION_ERROR → 400 Bad Request  (invalid input data)
+ * NOT_FOUND        → 404 Not Found    (also used for auth failures to prevent
+ *                                      leaking whether a resource exists)
+ * AUTH_ERROR       → 401 Unauthorized (not authenticated at all)
+ * SERVER_ERROR     → 500 Internal     (unexpected Firestore/Firebase failure)
+ */
+export class AppError extends Error {
+  constructor(
+    public readonly type: "VALIDATION_ERROR" | "NOT_FOUND" | "AUTH_ERROR" | "SERVER_ERROR",
+    message: string,
+    public readonly fields?: Record<string, string>,
+  ) {
+    super(message);
+    this.name = "AppError";
+  }
+}

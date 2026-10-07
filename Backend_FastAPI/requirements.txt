@@ -1,0 +1,10 @@
+fastapi
+uvicorn
+pydantic
+sqlalchemy
+pytest
+httpx
+firebase-admin
+python-multipart
+google-genai
+httpx
